@@ -1,0 +1,38 @@
+### TC1 – Basic read (detail)
+GET /api/v1/orders/1029 HTTP/1.1
+Host: example.test
+Authorization: Bearer {{A_token}}
+
+### TC1' – Swapped to victim ID
+GET /api/v1/orders/1030 HTTP/1.1
+Host: example.test
+Authorization: Bearer {{A_token}}
+
+### TC2 – Basic write (PATCH)
+PATCH /api/v1/profile HTTP/1.1
+Host: example.test
+Authorization: Bearer {{A_token}}
+Content-Type: application/json
+
+{ "userId": 77, "bio": "test" }
+
+### TC4 – Bulk mix
+POST /api/v1/orders/close HTTP/1.1
+Host: example.test
+Authorization: Bearer {{A_token}}
+Content-Type: application/json
+
+{ "ids": [1029,1030,1031] }
+
+### TC6 – File
+GET /files/receipt-2025-000123.pdf HTTP/1.1
+Host: example.test
+Authorization: Bearer {{A_token}}
+
+### TC7 – GraphQL (global id swap)
+POST /graphql HTTP/1.1
+Host: example.test
+Authorization: Bearer {{A_token}}
+Content-Type: application/json
+
+{"query":"query($id:ID!){ node(id:$id){ ... on Order { id number owner { id } } } }","variables":{"id":"T3JkZXI6MTAzMA=="}}
