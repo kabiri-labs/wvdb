@@ -1,3 +1,10 @@
+---
+Version: v0.1
+Updated: 2025-09-11T08:13:40.198035Z
+File: vulnerabilities/idor/payloads/sample-requests.http
+Vulnerability: IDOR
+Category: Payload
+---
 ### TC1 – Basic read (detail)
 GET /api/v1/orders/1029 HTTP/1.1
 Host: example.test

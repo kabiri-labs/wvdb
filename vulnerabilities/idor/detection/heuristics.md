@@ -1,3 +1,7 @@
+---
+Vulnerability: IDOR
+Category: Heuristic
+---
 # Detection Heuristics (Manual & Assisted)
 
 ## Identifier hotspots

